@@ -1,0 +1,23 @@
+CC=gcc
+CFLAGS= -Wall -Wextra -g
+
+
+DISASSMBLERDIR = src/Disassmbler
+DISASSMBLERSRC = $(DISASSMBLERDIR)/disassmbler.c
+
+DISASSMBLER= disassmbler
+
+TARGETS= $(DISASSMBLER)
+TARGETSOBJ = $(DISASSMBLEROBJ)
+
+all: $(TARGETS)
+
+$(TARGETS) : $(TARGETSOBJ)
+
+$(DISASSMBLER) : $(DISASSMBLERSRC)
+	$(CC) $(CFLAGS) -o $@ $<
+
+
+
+clean:
+	rm $(TARGETSOBJ) $(TARGETS)
