@@ -45,6 +45,73 @@ void UnimplementedInstruction(State8080 *state)
 }
 
 /*
+ * check if the parity of val is odd or even
+ * @return 0 if parity is even, 1 if odd
+ */
+int checkParity(uint16_t val)
+{
+  // XOR all the bits of val to check for parity
+  uint16_t ret = 0; // 0 won't affect the result at the beginning
+
+  for (int i = 0; i < 16; ++i)
+  {
+	ret = ret ^ (val & 1); // extract the LSB of val and XOR with the
+						   // previous LBS
+  	val = val >> 1;        // right shift val to get the next bit
+  }
+
+  return ret;
+}
+
+/*
+ * set the conditional flags of the current state according to value and
+ * affected
+ */
+void setCC(ConditionCodes *state_cc, ConditionCodes *affected, uint16_t value)
+{
+  if (value == 0 && affected->z == 1)
+  {
+	state_cc->z = 1;
+  }
+  else
+  {
+	state_cc->z = 0;
+  }
+  if (value >= 0x80 && affected->s == 1)
+  {
+	state_cc->s = 1;
+  }
+  else
+  {
+	state_cc->s = 0;
+  }
+  if (checkParity (value) == 0 && affected->p == 1)
+  {
+	state_cc->p = 1;
+  }
+  else
+  {
+	state_cc->p = 0;
+  }
+  if (affected->cy == 1)
+  {
+	state_cc->cy = 1;
+  }
+  else
+  {
+	state_cc->cy = 0;
+  }
+  if (affected->ac == 1)
+  {
+	state_cc->ac = 1;
+  }
+  else
+  {
+	state_cc->ac = 0;
+  }
+}
+
+/*
  * resolve the address from a register pair
  */
 uint16_t resolveAddressInPair(uint8_t msb, uint8_t lsb)
@@ -74,9 +141,22 @@ int Emulate8080Op(State8080 *state)
 	  state->memory[resolveAddressInPair (state->b, state->c)] =
 		  state->memory[state->a];
 	  break;
-	case 0x03:UnimplementedInstruction(state); break;
-	case 0x04:UnimplementedInstruction(state); break;
-	case 0x05:UnimplementedInstruction(state); break;
+	case 0x03:			// INX B
+	  ++(state->memory[resolveAddressInPair (state->b, state->c)]);
+	  break;
+	case 0x04:			// INR B, affects Z,S,P,AC
+	  ++(state->memory[state->b]);
+	  if (state->memory[state->b] == 0)
+	  {
+		state->cc.z = 1;
+	  }
+	  if (state->memory[state->b] >= 0x80) // msb is 1
+	  {
+		state->cc.s = 1;
+	  }
+	  break;
+	case 0x05:			// DCR B, affects Z,S,P,AC
+	  --(state->memory[state->b]);
 	case 0x06:UnimplementedInstruction(state); break;
 	case 0x07:UnimplementedInstruction(state); break;
 	case 0x09:UnimplementedInstruction(state); break;
