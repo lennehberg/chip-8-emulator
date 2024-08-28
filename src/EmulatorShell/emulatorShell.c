@@ -2,35 +2,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/*
- * struct representing then 8080 flags
- */
-typedef struct ConditionCodes {
-  uint8_t z : 1;
-  uint8_t s : 1;
-  uint8_t p : 1;
-  uint8_t cy : 1;
-  uint8_t ac : 1;
-  uint8_t pad : 3;
-} ConditionCodes;
+#define INT_8 8
+#define INT_16 16
+#define DEBUG
+#ifndef NDEBUG
+#include "emulatorShell.h"
+#endif //NDEBUG
 
-/*
- * struct representing the 8080 "state"
- */
-typedef struct State8080 {
-  uint8_t a;                // register A
-  uint8_t b;                // register B
-  uint8_t c;                // register C
-  uint8_t d;                // register D
-  uint8_t e;                // register E
-  uint8_t h;                // register H
-  uint8_t l;                // register L
-  uint16_t sp;              // stack pointer register
-  uint16_t pc;              // program counter register
-  uint8_t *memory;          // 8080 RAM, 0x0000 - 0xffff
-  struct ConditionCodes cc; // flags and stuff
-  uint8_t int_enable;
-} State8080;
+
+
 
 /*
  * raise an error for an instruction
@@ -63,6 +43,7 @@ int checkParity(uint16_t val) {
 /*
  * set the conditional flags of the current state according to value and
  * affected
+ * @param needed for zero, sign and parity
  */
 void setCC(ConditionCodes *state_cc, ConditionCodes *affected, uint16_t value) {
   if (value == 0 && affected->z == 1) {
@@ -93,12 +74,23 @@ void setCC(ConditionCodes *state_cc, ConditionCodes *affected, uint16_t value) {
 }
 
 /*
- * resolve the address from a register pair
+ * concatinate from a register pair
  */
-uint16_t resolveAddressInPair(uint8_t msb, uint8_t lsb) {
+uint16_t concBytes(uint8_t msb, uint8_t lsb) {
   uint16_t ret = msb;
   ret = (ret << 8) | lsb;
   return ret;
+}
+
+/*
+ * seperate byte into msb and lsb
+ */
+void sepByte(uint16_t byte, uint8_t *msb, uint8_t *lsb)
+{
+  uint16_t mask = 0xff00;
+  *msb = (mask & byte) >> INT_8;
+  mask = 0xff;
+  *lsb = (mask & byte);
 }
 
 uint16_t halfAdd(uint16_t byte1, uint16_t byte2, uint8_t *carry) {
@@ -106,7 +98,7 @@ uint16_t halfAdd(uint16_t byte1, uint16_t byte2, uint8_t *carry) {
   // HALF ADD
   // m_byte1 = 0000 0001 m_byte2 = 0000 0001
   m_byte1 = m_byte1 & byte1;
-  m_byte2 = m_byte2 & byte1;
+  m_byte2 = m_byte2 & byte2;
   // m_byte1 = 0000 0001 m_byte2 = 0000 0001
   res = m_byte1 ^ m_byte2;
   *carry = m_byte1 & m_byte2;
@@ -114,11 +106,12 @@ uint16_t halfAdd(uint16_t byte1, uint16_t byte2, uint8_t *carry) {
   return res;
 }
 
-uint16_t fullAdd(uint16_t m_byte1, uint16_t m_byte2, uint16_t *carry) {
+uint16_t fullAdd(uint16_t m_byte1, uint16_t m_byte2, uint8_t *carry) {
   uint16_t res = 0;
-  m_byte1 = m_byte1 ^ *carry;
-  res = m_byte1 ^ m_byte2;
-  *carry = m_byte1 & m_byte2;
+  uint8_t temp_carry1 = 0, temp_carry2 = 0;
+  m_byte1 = halfAdd(m_byte1, m_byte2, &temp_carry1);
+  res = halfAdd(m_byte1, *carry, &temp_carry2);
+  *carry = temp_carry1 | temp_carry2;
 
   return res;
 }
@@ -147,15 +140,25 @@ uint16_t addAndCarries(uint16_t byte1, uint16_t byte2, size_t size,
   uint16_t res = halfAdd(byte1, byte2, carry);
   uint16_t m_byte1 = 1, m_byte2 = 1, f_byte = 0;
   for (size_t i = 1; i < size; ++i) {
+    m_byte1 = 1;
+    m_byte2 = 1;
+    // if aucillary carry flag is set,
+    // check if a carry happened from bit 3 to bit 4
     if (i == 4) {
       if (*carry && affected->ac) {
         *auxcarry = 1;
       }
     }
+    // i.e if i == 4:
+    // m_byte1 = 0001 0000 => 0000 0000
     m_byte1 = (m_byte1 << i) & byte1;
+    // m_byte1 = 0001 0000 => 0001 0000
     m_byte2 = (m_byte2 << i) & byte2;
+    // f_byte = 0001 0000 *carry = 0000 0000
+    m_byte1 = m_byte1 >> i;
+    m_byte2 = m_byte2 >> i;
     f_byte = fullAdd(m_byte1, m_byte2, carry);
-    res = res | f_byte;
+    res = res | (f_byte << i);
   }
   return res;
 }
@@ -164,44 +167,65 @@ uint16_t addAndCarries(uint16_t byte1, uint16_t byte2, size_t size,
  * emulate the current instruction at the program counter
  * according to the 8080 instruction set
  */
-int Emulate8080Op(State8080 *state) {
+void Emulate8080Op(State8080 *state) {
   unsigned char *opcode = &state->memory[state->pc];
+  ConditionCodes affected = {};
+  uint8_t carry = 0, auxcarry = 0;
 
   switch (*opcode) {
   case 0x00:
     break;   // NOP
-  case 0x01: // LXI B,D16
+  case 0x01: // LXI B,D16 | B = hdata, C = ldata
     state->c = opcode[1];
     state->b = opcode[2];
     state->pc += 2;
     break;
-  case 0x02: // STAX B
-    state->memory[resolveAddressInPair(state->b, state->c)] =
-        state->memory[state->a];
+  case 0x02: // STAX B | ((BC)) = (A)
+    state->memory[concBytes(state->b, state->c)] =
+        state->a;
     break;
-  case 0x03: // INX B
-    ++(state->memory[resolveAddressInPair(state->b, state->c)]);
-    break;
-  case 0x04: // INR B, affects Z,S,P,AC
-    ++(state->memory[state->b]);
-    if (state->memory[state->b] == 0) {
-      state->cc.z = 1;
-    }
-    if (state->memory[state->b] >= 0x80) // msb is 1
+  case 0x03: // INX B | (BC) = (BC) + 1
+    // increment register C, check if carry, increment B if necessary
+    state->c = addAndCarries(state->c, 1, INT_8,
+      &state->cc.cy, &state->cc.ac, &affected);
+    if (&state->cc.cy)
     {
-      state->cc.s = 1;
+      state->b = addAndCarries(state->b, 1, INT_8,
+        &state->cc.cy, &state->cc.ac, &affected);
     }
     break;
-  case 0x05: // DCR B, affects Z,S,P,AC
-    --(state->memory[state->b]);
-  case 0x06:
-    UnimplementedInstruction(state);
+  case 0x04: // INR B | (B) = (B) + 1, affects Z,S,P,AC
+    affected.z = 1; affected.s = 1; affected.p = 1; affected.ac = 1;
+    state->b = addAndCarries(state->b, 1, INT_8,
+      &state->cc.cy, &state->cc.ac, &affected);
+    setCC(&state->cc, &affected, state->b);
     break;
-  case 0x07:
-    UnimplementedInstruction(state);
+  case 0x05: // DCR B | (B) = (B) - 1, affects Z,S,P,AC
+    state->b = addAndCarries(state->b, ~1, INT_8,
+      &state->cc.cy, &state->cc.ac, &affected);
+  case 0x06: // MVI B,D8 | (B) = byte 2
+    state->b = opcode[1];
+    ++(state->pc);
     break;
-  case 0x09:
-    UnimplementedInstruction(state);
+  case 0x07: // RLC | shift left A; A0, CY = A7
+    state->cc.cy = state->a & 0x80;
+    state->a = state->a << 1;
+    state->a = state->a | state->cc.cy;
+    break;
+  case 0x09: // DAD B | (HL) = (HL) + (BC), affects CY
+    // concatinate HL and BC
+    uint16_t hl = concBytes(state->h, state->l);
+    uint16_t bc = concBytes(state->b, state->c);
+    // add BC to HL and save in HL
+    hl = addAndCarries(hl, bc, INT_16,
+      &state->cc.cy, &state->cc.ac, &affected);
+    // seperate the hl "16-bit" byte into 8-bit bytes and store in h and l,
+    // respectively
+    sepByte(hl, &state->h, &state->l);
+    // set the condition flags for CY
+    // set the affected flag to CY
+    affected.cy = state->cc.cy;
+    setCC(&state->cc, &affected, 0);
     break;
   case 0x0a:
     UnimplementedInstruction(state);
@@ -916,5 +940,5 @@ int Emulate8080Op(State8080 *state) {
     break;
   }
 
-  ++state->pc;
+  ++(state->pc);
 }
