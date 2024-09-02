@@ -43,7 +43,7 @@ int Disassmble8080op(unsigned char *codeBuffer, size_t pc) {
     printf("DCX    B");
     break;
   case 0x0c:
-    printf("INC    C");
+    printf("INR    C");
     break;
   case 0x0d:
     printf("DCR    C");

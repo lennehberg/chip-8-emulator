@@ -163,6 +163,86 @@ uint16_t addAndCarries(uint16_t byte1, uint16_t byte2, size_t size,
   return res;
 }
 
+void LXI_(uint8_t *rh, uint8_t *rl, const uint8_t *state_memory,
+          const unsigned char *opcode, uint16_t *pc)
+{
+  *rh = state_memory[opcode[2]];
+  *rl = state_memory[opcode[1]];
+  *pc += 2;
+}
+
+void STAX_(uint8_t rh, uint8_t rl, uint8_t *state_memory, uint8_t state_a)
+{
+  state_memory[concBytes(rh, rl)] = state_a;
+}
+
+void INX_(uint8_t *rh, uint8_t *rl, ConditionCodes *state_cc, ConditionCodes *affected)
+{
+  // increment low register, check if carry, increment high register if necessary
+  *rl = addAndCarries(*rl, 1, INT_8,
+                      &state_cc->cy, &state_cc->ac, affected);
+  if (state_cc->cy)
+  {
+    *rh = addAndCarries(*rh, 1, INT_8, &
+                        state_cc->cy, &state_cc->ac, affected);
+  }
+}
+
+void INR_(uint8_t *reg_ptr, ConditionCodes *state_cc, ConditionCodes *affected)
+{
+  // increment register content
+  affected->z = 1; affected->s = 1; affected->p = 1; affected->ac = 1;
+  *reg_ptr = addAndCarries(*reg_ptr, 1, INT_8,
+                          &state_cc->cy, &state_cc->ac, affected);
+  setCC(state_cc, affected, *reg_ptr);
+}
+
+void DCR_(uint8_t *reg_ptr, ConditionCodes *state_cc, ConditionCodes *affected)
+{
+  // decrement register content, using 2's complement
+  affected->z = 1; affected->s = 1; affected->p = 1; affected->ac = 1;
+  *reg_ptr = addAndCarries(*reg_ptr, (~1) + 1, INT_8,
+                          &state_cc->cy, &state_cc->ac, affected);
+  setCC(state_cc, affected, *reg_ptr);
+}
+
+void MVI_(uint8_t *reg_ptr, uint8_t *state_memory, const unsigned char *opcode, uint16_t *state_pc)
+{
+  *reg_ptr = state_memory[opcode[1]];
+  ++(*state_pc);
+}
+
+void DAD_(uint8_t *state_h, uint8_t *state_l, uint8_t *rh, uint8_t *rl,
+          ConditionCodes *state_cc, ConditionCodes *affected)
+{
+  // concatinate HL and (rh)(rl)
+  uint16_t hl = concBytes(*state_h, *state_l);
+  uint16_t bc = concBytes(*rh, *rl);
+  // add (rh)(rl) to HL and save in HL
+  hl = addAndCarries(hl, bc, INT_16,
+    &state_cc->cy, &state_cc->ac, affected);
+  // seperate the hl "16-bit" byte into 8-bit bytes and store in h and l,
+  // respectively
+  sepByte(hl, state_h, state_l);
+  // set the condition flags for CY
+  // set the affected flag to CY
+  affected->cy = state_cc->cy;
+  setCC(state_cc, affected, 0);
+}
+
+void LDAX_(uint8_t *state_a, uint8_t *state_memory, uint8_t rh, uint8_t rl)
+{
+  *state_a = state_memory[concBytes(rh, rl)];
+}
+
+void DCX_(uint8_t *rh, uint8_t *rl, ConditionCodes *state_cc, ConditionCodes *affected)
+{
+  uint16_t bc = concBytes(*rh, *rl);
+  bc = addAndCarries(bc, (~1) + 1, INT_16,
+    &state_cc->cy, &state_cc->ac, affected);
+  sepByte(bc, rh, rl);
+}
+
 /*
  * emulate the current instruction at the program counter
  * according to the 8080 instruction set
@@ -170,175 +250,153 @@ uint16_t addAndCarries(uint16_t byte1, uint16_t byte2, size_t size,
 void Emulate8080Op(State8080 *state) {
   unsigned char *opcode = &state->memory[state->pc];
   ConditionCodes affected = {};
-  uint8_t carry = 0, auxcarry = 0;
 
   switch (*opcode) {
   case 0x00:
     break;   // NOP
   case 0x01: // LXI B,D16 | B = hdata, C = ldata
-    state->c = opcode[1];
-    state->b = opcode[2];
-    state->pc += 2;
+    LXI_(&state->b, &state->c, state->memory, opcode, &state->pc);
     break;
   case 0x02: // STAX B | ((BC)) = (A)
-    state->memory[concBytes(state->b, state->c)] =
-        state->a;
+    STAX_(state->b, state->c, state->memory, state->a);
     break;
   case 0x03: // INX B | (BC) = (BC) + 1
     // increment register C, check if carry, increment B if necessary
-    state->c = addAndCarries(state->c, 1, INT_8,
-      &state->cc.cy, &state->cc.ac, &affected);
-    if (&state->cc.cy)
-    {
-      state->b = addAndCarries(state->b, 1, INT_8,
-        &state->cc.cy, &state->cc.ac, &affected);
-    }
+    INX_(&state->b, &state->c, &state->cc, &affected);
     break;
   case 0x04: // INR B | (B) = (B) + 1, affects Z,S,P,AC
-    affected.z = 1; affected.s = 1; affected.p = 1; affected.ac = 1;
-    state->b = addAndCarries(state->b, 1, INT_8,
-      &state->cc.cy, &state->cc.ac, &affected);
-    setCC(&state->cc, &affected, state->b);
+    INR_(&state->b, &state->cc, &affected);
     break;
   case 0x05: // DCR B | (B) = (B) - 1, affects Z,S,P,AC
-    state->b = addAndCarries(state->b, ~1, INT_8,
-      &state->cc.cy, &state->cc.ac, &affected);
+    DCR_(&state->b, &state->cc, &affected);
   case 0x06: // MVI B,D8 | (B) = byte 2
-    state->b = opcode[1];
-    ++(state->pc);
+    MVI_(&state->b, state->memory, opcode, &state->pc);
     break;
   case 0x07: // RLC | shift left A; A0, CY = A7
     state->cc.cy = state->a & 0x80;
     state->a = state->a << 1;
+    state->cc.cy = state->cc.cy >> INT_8;
     state->a = state->a | state->cc.cy;
     break;
   case 0x09: // DAD B | (HL) = (HL) + (BC), affects CY
-    // concatinate HL and BC
-    uint16_t hl = concBytes(state->h, state->l);
-    uint16_t bc = concBytes(state->b, state->c);
-    // add BC to HL and save in HL
-    hl = addAndCarries(hl, bc, INT_16,
-      &state->cc.cy, &state->cc.ac, &affected);
-    // seperate the hl "16-bit" byte into 8-bit bytes and store in h and l,
-    // respectively
-    sepByte(hl, &state->h, &state->l);
-    // set the condition flags for CY
-    // set the affected flag to CY
-    affected.cy = state->cc.cy;
-    setCC(&state->cc, &affected, 0);
+    DAD_(&state->h, &state->l, &state->b, &state->c, &state->cc, &affected);
     break;
-  case 0x0a:
+  case 0x0a: // LDAX B | (A) <- ((BC))
+    LDAX_(&state->a, state->memory, state->b, state->c);
+    break;
+  case 0x0b: // DCX B | (BC) = (BC) - 1
+    DCX_(&state->b, &state->c, &state->cc, &affected);
+    break;
+  case 0x0c: // INR C | (C) = (C) + 1, affects Z,S,P,AC
+    INR_(&state->c, &state->cc, &affected);
+    break;
+  case 0x0d: // DCR C | (C) = (C) - 1, affects Z,S,P,AC
+    DCR_(&state->c, &state->cc, &affected);
+    break;
+  case 0x0e: // MVI C,D8 | (C) = byte 2
+    MVI_(&state->c, state->memory, opcode, &state->pc);
+    break;
+  case 0x0f: // RRC | CY, A7 = A0
+    state->cc.cy = state->a & 0x1;
+    state->cc.cy = state->cc.cy << INT_8;
+    state->a = state->a >> 1;
+    state->a = (state->a & state->cc.cy) | (state->a & ~state->cc.cy);
+    state->cc.cy = state->cc.cy >> INT_8;
+    break;
+  case 0x11: // LXI D, D16 | D = BYTE3, E = BYTE2
+    LXI_(&state->d, &state->e, state->memory, opcode, &state->pc);
+    break;
+  case 0x12: // STAX D
+    STAX_(state->d, state->e, state->memory, state->a);
+    break;
+  case 0x13: // INX D
+    INX_(&state->d, &state->e, &state->cc, &affected);
+    break;
+  case 0x14: // INR D
+    INR_(&state->d, &state->cc, &affected);
+    break;
+  case 0x15: // DCR D
+    DCR_(&state->d, &state->cc, &affected);
+    break;
+  case 0x16: // MVI D,D8
+    MVI_(&state->d, state->memory, opcode, &state->pc);
+    break;
+  case 0x17: // RAL
     UnimplementedInstruction(state);
     break;
-  case 0x0b:
+  case 0x19: // DAD D
+    DAD_(&state->h, &state->l, &state->d, &state->e, &state->cc, &affected);
+    break;
+  case 0x1a: // LDAX D
+    LDAX_(&state->a, state->memory, state->d, state->e);
+    break;
+  case 0x1b: // DCX D
+    DCX_(&state->d, &state->e, &state->cc, &affected);
+    break;
+  case 0x1c: // INR E
+    INR_(&state->e, &state->cc, &affected);
+    break;
+  case 0x1d: // DCR E
+    DCR_(&state->e, &state->cc, &affected);
+    break;
+  case 0x1e: // MVI E,D8
+    MVI_(&state->e, state->memory, opcode, &state->pc);
+    break;
+  case 0x1f: // RAR
     UnimplementedInstruction(state);
     break;
-  case 0x0c:
+  case 0x20: // RIM
     UnimplementedInstruction(state);
     break;
-  case 0x0d:
+  case 0x21: // LXI H,16
+    LXI_(&state->h, &state->l, state->memory, opcode, &state->pc);
+    break;
+  case 0x22: // SHLD D16
     UnimplementedInstruction(state);
     break;
-  case 0x0e:
+  case 0x23: // INX H
+    INX_(&state->h, &state->l, &state->cc, &affected);
+    break;
+  case 0x24: // INR H
+    INR_(&state->h, &state->cc, &affected);
+    break;
+  case 0x25: // DCR H
+    DCR_(&state->h, &state->cc, &affected);
+    break;
+  case 0x26: // MVI H.D8
+    MVI_(&state->h, state->memory, opcode, &state->pc);
+    break;
+  case 0x27: // DAA
     UnimplementedInstruction(state);
     break;
-  case 0x0f:
+  case 0x29: // DAD H
+    DAD_(&state->h, &state->l, &state->h, &state->l, &state->cc, &affected);
+    break;
+  case 0x2a: // LHLD D16
     UnimplementedInstruction(state);
     break;
-  case 0x11:
+  case 0x2b: // DCX H
+    DCX_(&state->h, &state->l, &state->cc, &affected);
+    break;
+  case 0x2c: // INR L
+    INR_(&state->l, &state->cc, &affected);
+    break;
+  case 0x2d: // DCR L
+    DCR_(&state->l, &state->cc, &affected);
+    break;
+  case 0x2e: // MVI L.D8
+    MVI_(&state->l, state->memory, opcode, &state->pc);
+    break;
+  case 0x2f: // CMA
     UnimplementedInstruction(state);
     break;
-  case 0x12:
+  case 0x30: // SIM
     UnimplementedInstruction(state);
     break;
-  case 0x13:
+  case 0x31: // LXI SP,D16
     UnimplementedInstruction(state);
     break;
-  case 0x14:
-    UnimplementedInstruction(state);
-    break;
-  case 0x15:
-    UnimplementedInstruction(state);
-    break;
-  case 0x16:
-    UnimplementedInstruction(state);
-    break;
-  case 0x17:
-    UnimplementedInstruction(state);
-    break;
-  case 0x19:
-    UnimplementedInstruction(state);
-    break;
-  case 0x1a:
-    UnimplementedInstruction(state);
-    break;
-  case 0x1b:
-    UnimplementedInstruction(state);
-    break;
-  case 0x1c:
-    UnimplementedInstruction(state);
-    break;
-  case 0x1d:
-    UnimplementedInstruction(state);
-    break;
-  case 0x1e:
-    UnimplementedInstruction(state);
-    break;
-  case 0x1f:
-    UnimplementedInstruction(state);
-    break;
-  case 0x20:
-    UnimplementedInstruction(state);
-    break;
-  case 0x21:
-    UnimplementedInstruction(state);
-    break;
-  case 0x22:
-    UnimplementedInstruction(state);
-    break;
-  case 0x23:
-    UnimplementedInstruction(state);
-    break;
-  case 0x24:
-    UnimplementedInstruction(state);
-    break;
-  case 0x25:
-    UnimplementedInstruction(state);
-    break;
-  case 0x26:
-    UnimplementedInstruction(state);
-    break;
-  case 0x27:
-    UnimplementedInstruction(state);
-    break;
-  case 0x29:
-    UnimplementedInstruction(state);
-    break;
-  case 0x2a:
-    UnimplementedInstruction(state);
-    break;
-  case 0x2b:
-    UnimplementedInstruction(state);
-    break;
-  case 0x2c:
-    UnimplementedInstruction(state);
-    break;
-  case 0x2d:
-    UnimplementedInstruction(state);
-    break;
-  case 0x2e:
-    UnimplementedInstruction(state);
-    break;
-  case 0x2f:
-    UnimplementedInstruction(state);
-    break;
-  case 0x30:
-    UnimplementedInstruction(state);
-    break;
-  case 0x31:
-    UnimplementedInstruction(state);
-    break;
-  case 0x32:
+  case 0x32: // STA D16
     UnimplementedInstruction(state);
     break;
   case 0x33:
@@ -365,14 +423,14 @@ void Emulate8080Op(State8080 *state) {
   case 0x3b:
     UnimplementedInstruction(state);
     break;
-  case 0x3c:
-    UnimplementedInstruction(state);
+  case 0x3c: // INR A
+    INR_(&state->a, &state->cc, &affected);
     break;
-  case 0x3d:
-    UnimplementedInstruction(state);
+  case 0x3d: // DCR A
+    DCR_(&state->a, &state->cc, &affected);
     break;
-  case 0x3e:
-    UnimplementedInstruction(state);
+  case 0x3e: // MVI A,D16
+    MVI_(&state->a, state->memory, opcode, &state->pc);
     break;
   case 0x3f:
     UnimplementedInstruction(state);
