@@ -4,6 +4,9 @@
 
 #define INT_8 8
 #define INT_16 16
+
+#define BITWISE_OVRR(dest, src) (dest & src) | (~dest & src)
+
 #define DEBUG
 #ifndef NDEBUG
 #include "emulatorShell.h"
@@ -197,11 +200,29 @@ void INR_(uint8_t *reg_ptr, ConditionCodes *state_cc, ConditionCodes *affected)
   setCC(state_cc, affected, *reg_ptr);
 }
 
+void INR16_(uint16_t *reg_ptr, ConditionCodes *state_cc, ConditionCodes *affected)
+{
+  // increment register content
+  affected->z = 1; affected->s = 1; affected->p = 1; affected->ac = 1;
+  *reg_ptr = addAndCarries(*reg_ptr, 1, INT_16,
+                          &state_cc->cy, &state_cc->ac, affected);
+  setCC(state_cc, affected, *reg_ptr);
+}
+
 void DCR_(uint8_t *reg_ptr, ConditionCodes *state_cc, ConditionCodes *affected)
 {
   // decrement register content, using 2's complement
   affected->z = 1; affected->s = 1; affected->p = 1; affected->ac = 1;
   *reg_ptr = addAndCarries(*reg_ptr, (~1) + 1, INT_8,
+                          &state_cc->cy, &state_cc->ac, affected);
+  setCC(state_cc, affected, *reg_ptr);
+}
+
+void DCR16_(uint16_t *reg_ptr, ConditionCodes *state_cc, ConditionCodes *affected)
+{
+  // decrement register content, using 2's complement
+  affected->z = 1; affected->s = 1; affected->p = 1; affected->ac = 1;
+  *reg_ptr = addAndCarries(*reg_ptr, (~1) + 1, INT_16,
                           &state_cc->cy, &state_cc->ac, affected);
   setCC(state_cc, affected, *reg_ptr);
 }
@@ -243,6 +264,78 @@ void DCX_(uint8_t *rh, uint8_t *rl, ConditionCodes *state_cc, ConditionCodes *af
   sepByte(bc, rh, rl);
 }
 
+uint8_t MUX_(uint8_t a, uint8_t b, uint8_t sel)
+{
+  uint8_t out = (~sel) & a | sel & b;
+  return out;
+}
+
+void shiftLeft(const uint8_t a, uint8_t *out)
+{
+  uint8_t mask = 1;
+  for (int i = 0; i < INT_8; ++i)
+  {
+    *out = *out | (MUX_(0, a & mask, mask) << 1);
+    mask = mask << 1;
+  }
+}
+
+void shiftRight(const uint8_t a, uint8_t *out)
+{
+  uint8_t mask = 0x80;
+  for (int i = INT_8; i > 0; --i)
+  {
+    *out = *out | (MUX_(0, a & mask, mask) >> 1);
+    mask = mask >> 1;
+  }
+}
+
+uint8_t RLC_(const uint8_t a, uint8_t *cy)
+{
+  uint8_t out = 0;
+  // bit 0 = prev bit 7, cy = prev bit 0
+  uint8_t mask = 0x80;
+  // mask = prev bit 7
+  mask = mask & a >> (INT_8 - 1);
+  out = mask;
+  *cy = mask;
+  shiftLeft(a, &out);
+
+  return out;
+}
+
+uint8_t RRC_(const uint8_t a, uint8_t *cy)
+{
+  uint8_t out = 0;
+  // bit 7 = prev bit 0, cy = prev bit 0
+  uint8_t mask = 1;
+  *cy = mask & a;
+  out = (mask & a) << (INT_8 - 1);
+  shiftRight(a, &out);
+
+  return out;
+}
+
+uint8_t RAL_(const uint8_t a, uint8_t *cy)
+{
+  uint8_t out = 0;
+  // bit 0 = prev cy, cy = prev bit 7
+  out = *cy;
+  *cy = 0x80 & a >> (INT_8 - 1);
+  shiftLeft(a, &out);
+  return out;
+}
+
+uint8_t RAR_(const uint8_t a, uint8_t *cy)
+{
+  uint8_t out = 0;
+  // bit 7 = prev bit 7, cy = prev bit 0
+  out = 0x80 & a;
+  *cy = 0x01 & a;
+  shiftRight(a, &out);
+  return out;
+}
+
 /*
  * emulate the current instruction at the program counter
  * according to the 8080 instruction set
@@ -273,10 +366,7 @@ void Emulate8080Op(State8080 *state) {
     MVI_(&state->b, state->memory, opcode, &state->pc);
     break;
   case 0x07: // RLC | shift left A; A0, CY = A7
-    state->cc.cy = state->a & 0x80;
-    state->a = state->a << 1;
-    state->cc.cy = state->cc.cy >> INT_8;
-    state->a = state->a | state->cc.cy;
+    state->a = RLC_(state->a, &state->cc.cy);
     break;
   case 0x09: // DAD B | (HL) = (HL) + (BC), affects CY
     DAD_(&state->h, &state->l, &state->b, &state->c, &state->cc, &affected);
@@ -297,11 +387,7 @@ void Emulate8080Op(State8080 *state) {
     MVI_(&state->c, state->memory, opcode, &state->pc);
     break;
   case 0x0f: // RRC | CY, A7 = A0
-    state->cc.cy = state->a & 0x1;
-    state->cc.cy = state->cc.cy << INT_8;
-    state->a = state->a >> 1;
-    state->a = (state->a & state->cc.cy) | (state->a & ~state->cc.cy);
-    state->cc.cy = state->cc.cy >> INT_8;
+    state->a = RRC_(state->a, &state->cc.cy);
     break;
   case 0x11: // LXI D, D16 | D = BYTE3, E = BYTE2
     LXI_(&state->d, &state->e, state->memory, opcode, &state->pc);
@@ -321,8 +407,8 @@ void Emulate8080Op(State8080 *state) {
   case 0x16: // MVI D,D8
     MVI_(&state->d, state->memory, opcode, &state->pc);
     break;
-  case 0x17: // RAL
-    UnimplementedInstruction(state);
+  case 0x17: // RAL | A = A<<1; bit 0 = prev CY; CY = prev bit 7
+    state->a = RAL_(state->a, &state->cc.cy);
     break;
   case 0x19: // DAD D
     DAD_(&state->h, &state->l, &state->d, &state->e, &state->cc, &affected);
@@ -342,8 +428,8 @@ void Emulate8080Op(State8080 *state) {
   case 0x1e: // MVI E,D8
     MVI_(&state->e, state->memory, opcode, &state->pc);
     break;
-  case 0x1f: // RAR
-    UnimplementedInstruction(state);
+  case 0x1f: // RAR | A = A >> 1; bit 7 = prev bit 7; CY = prev bit 0
+    state->a = RAR_(state->a, &state->cc.cy);
     break;
   case 0x20: // RIM
     UnimplementedInstruction(state);
@@ -352,7 +438,9 @@ void Emulate8080Op(State8080 *state) {
     LXI_(&state->h, &state->l, state->memory, opcode, &state->pc);
     break;
   case 0x22: // SHLD D16
-    UnimplementedInstruction(state);
+    state->memory[opcode[1]] = state->l;
+    state->memory[opcode[1] + 1] = state->h;
+    ++state->pc;
     break;
   case 0x23: // INX H
     INX_(&state->h, &state->l, &state->cc, &affected);
@@ -363,7 +451,7 @@ void Emulate8080Op(State8080 *state) {
   case 0x25: // DCR H
     DCR_(&state->h, &state->cc, &affected);
     break;
-  case 0x26: // MVI H.D8
+  case 0x26: // MVI H,D8
     MVI_(&state->h, state->memory, opcode, &state->pc);
     break;
   case 0x27: // DAA
@@ -373,7 +461,9 @@ void Emulate8080Op(State8080 *state) {
     DAD_(&state->h, &state->l, &state->h, &state->l, &state->cc, &affected);
     break;
   case 0x2a: // LHLD D16
-    UnimplementedInstruction(state);
+    state->l = state->memory[opcode[1]];
+    state->h = state->memory[opcode[1] + 1];
+    ++state->pc;
     break;
   case 0x2b: // DCX H
     DCX_(&state->h, &state->l, &state->cc, &affected);
@@ -388,25 +478,32 @@ void Emulate8080Op(State8080 *state) {
     MVI_(&state->l, state->memory, opcode, &state->pc);
     break;
   case 0x2f: // CMA
-    UnimplementedInstruction(state);
+    state->a = ~state->a;
     break;
   case 0x30: // SIM
     UnimplementedInstruction(state);
     break;
   case 0x31: // LXI SP,D16
-    UnimplementedInstruction(state);
+    uint8_t spHi, spLow;
+    LXI_(&spHi, &spLow, state->memory, opcode, &state->pc);
+    state->sp = concBytes(spHi, spLow);
     break;
   case 0x32: // STA D16
-    UnimplementedInstruction(state);
+    state->memory[opcode[1]] = state->a;
+    ++state->pc;
     break;
-  case 0x33:
-    UnimplementedInstruction(state);
+  case 0x33: // INX SP
+    ++state->sp;
     break;
-  case 0x34:
-    UnimplementedInstruction(state);
+  case 0x34: // INR M
+    uint16_t hl = concBytes(state->h, state->l);
+    INR16_(&state->memory[hl], &state->cc, &affected);
+    sepByte(hl, &state->h, &state->l);
     break;
-  case 0x35:
-    UnimplementedInstruction(state);
+  case 0x35: // DCR M
+    hl = concBytes(state->h, state->l);
+    DCR16_(&hl, &state->cc, &affected);
+    sepByte(hl, &state->h, &state->l);
     break;
   case 0x36:
     UnimplementedInstruction(state);
