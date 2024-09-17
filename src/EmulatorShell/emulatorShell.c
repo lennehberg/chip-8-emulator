@@ -6,6 +6,10 @@
 #define INT_16 16
 
 #define BITWISE_OVRR(dest, src) (dest & src) | (~dest & src)
+#define MOV_(dest, src) \
+{ \
+  dest = src; \
+}
 
 #define DEBUG
 #ifndef NDEBUG
@@ -336,6 +340,8 @@ uint8_t RAR_(const uint8_t a, uint8_t *cy)
   return out;
 }
 
+
+
 /*
  * emulate the current instruction at the program counter
  * according to the 8080 instruction set
@@ -497,28 +503,33 @@ void Emulate8080Op(State8080 *state) {
     break;
   case 0x34: // INR M
     uint16_t hl = concBytes(state->h, state->l);
-    INR16_(&state->memory[hl], &state->cc, &affected);
-    sepByte(hl, &state->h, &state->l);
+    INR_(&state->memory[hl], &state->cc, &affected);
+    // sepByte(hl, &state->h, &state->l);
     break;
   case 0x35: // DCR M
     hl = concBytes(state->h, state->l);
-    DCR16_(&hl, &state->cc, &affected);
-    sepByte(hl, &state->h, &state->l);
+    DCR_(&state->memory[hl], &state->cc, &affected);
+    // sepByte(hl, &state->h, &state->l);
     break;
-  case 0x36:
-    UnimplementedInstruction(state);
+  case 0x36: // MVI M,D8
+    hl = concBytes(state->h, state->l);
+    MVI_(&state->memory[hl], state->memory, opcode, &state->pc);
     break;
-  case 0x37:
-    UnimplementedInstruction(state);
+  case 0x37: // STC
+    state->cc.cy = 1;
     break;
-  case 0x39:
-    UnimplementedInstruction(state);
+  case 0x39: // DAD SP
+    DAD_(&state->h, &state->l, &spHi, &spLow,
+      &state->cc, &affected);
+    state->sp = concBytes(spHi, spLow);
     break;
-  case 0x3a:
-    UnimplementedInstruction(state);
+  case 0x3a: // LDA D8
+    state->a = opcode[1];
+    ++state->pc;
     break;
-  case 0x3b:
-    UnimplementedInstruction(state);
+  case 0x3b: // DCX SP
+    DCX_(&spHi, &spLow, &state->cc, &affected);
+    state->sp = concBytes(spHi, spLow);
     break;
   case 0x3c: // INR A
     INR_(&state->a, &state->cc, &affected);
@@ -529,252 +540,299 @@ void Emulate8080Op(State8080 *state) {
   case 0x3e: // MVI A,D16
     MVI_(&state->a, state->memory, opcode, &state->pc);
     break;
-  case 0x3f:
-    UnimplementedInstruction(state);
+  case 0x3f: // CMC
+    state->cc.cy = ~state->cc.cy;
     break;
-  case 0x40:
-    UnimplementedInstruction(state);
+  case 0x40: // MOV B,B
+    MOV_(state->b, state->b);
     break;
-  case 0x41:
-    UnimplementedInstruction(state);
+  case 0x41: // MOV B,C
+    MOV_(state->b, state->c);
     break;
-  case 0x42:
-    UnimplementedInstruction(state);
+  case 0x42: // MOV B,D
+    MOV_(state->b, state->d);
     break;
-  case 0x43:
-    UnimplementedInstruction(state);
+  case 0x43: // MOV B,E
+    MOV_(state->b, state->e);
     break;
-  case 0x44:
-    UnimplementedInstruction(state);
+  case 0x44: // MOV B,H
+    MOV_(state->b, state->h);
     break;
-  case 0x45:
-    UnimplementedInstruction(state);
+  case 0x45: // MOV B,L
+    MOV_(state->b, state->l);
     break;
-  case 0x46:
-    UnimplementedInstruction(state);
+  case 0x46: // MOV B,M
+    hl = concBytes(state->h, state->l);
+    MOV_(state->b, state->memory[hl]);
     break;
-  case 0x47:
-    UnimplementedInstruction(state);
+  case 0x47: // MOV B,A
+    MOV_(state->b, state->a);
     break;
   case 0x48:
-    UnimplementedInstruction(state);
+    MOV_(state->c, state->b);
     break;
   case 0x49:
-    UnimplementedInstruction(state);
+    MOV_(state->c, state->c);
     break;
   case 0x4a:
-    UnimplementedInstruction(state);
+    MOV_(state->c, state->d);
     break;
   case 0x4b:
-    UnimplementedInstruction(state);
+    MOV_(state->c, state->e);
     break;
   case 0x4c:
-    UnimplementedInstruction(state);
+    MOV_(state->c, state->h);
     break;
   case 0x4d:
-    UnimplementedInstruction(state);
+    MOV_(state->c, state->l);
     break;
   case 0x4e:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    MOV_(state->c, state->memory[hl]);
     break;
   case 0x4f:
-    UnimplementedInstruction(state);
+    MOV_(state->c, state->a);
     break;
   case 0x50:
-    UnimplementedInstruction(state);
+    MOV_(state->d, state->b);
     break;
   case 0x51:
-    UnimplementedInstruction(state);
+    MOV_(state->d, state->c);
     break;
   case 0x52:
-    UnimplementedInstruction(state);
+    MOV_(state->d, state->d);
     break;
   case 0x53:
-    UnimplementedInstruction(state);
+    MOV_(state->d, state->e);
     break;
   case 0x54:
-    UnimplementedInstruction(state);
+    MOV_(state->d, state->h);
     break;
   case 0x55:
-    UnimplementedInstruction(state);
+    MOV_(state->d, state->l);
     break;
   case 0x56:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    MOV_(state->d, state->memory[hl]);
     break;
   case 0x57:
-    UnimplementedInstruction(state);
+    MOV_(state->d, state->a);
     break;
   case 0x58:
-    UnimplementedInstruction(state);
+    MOV_(state->e, state->b);
     break;
   case 0x59:
-    UnimplementedInstruction(state);
+    MOV_(state->e, state->c);
     break;
   case 0x5a:
-    UnimplementedInstruction(state);
+    MOV_(state->e, state->d);
     break;
   case 0x5b:
-    UnimplementedInstruction(state);
+    MOV_(state->e, state->e);
     break;
   case 0x5c:
-    UnimplementedInstruction(state);
+    MOV_(state->e, state->h);
     break;
   case 0x5d:
-    UnimplementedInstruction(state);
+    MOV_(state->e, state->l);
     break;
   case 0x5e:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    MOV_(state->e, state->memory[hl]);
     break;
   case 0x5f:
-    UnimplementedInstruction(state);
+    MOV_(state->e, state->a);
     break;
   case 0x60:
-    UnimplementedInstruction(state);
+    MOV_(state->h, state->b);
     break;
   case 0x61:
-    UnimplementedInstruction(state);
+    MOV_(state->h, state->c);
     break;
   case 0x62:
-    UnimplementedInstruction(state);
+    MOV_(state->h, state->d);
     break;
   case 0x63:
-    UnimplementedInstruction(state);
+    MOV_(state->h, state->e);
     break;
   case 0x64:
-    UnimplementedInstruction(state);
+    MOV_(state->h, state->h);
     break;
   case 0x65:
-    UnimplementedInstruction(state);
+    MOV_(state->h, state->l);
     break;
   case 0x66:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    MOV_(state->h, state->memory[hl]);
     break;
   case 0x67:
-    UnimplementedInstruction(state);
+    MOV_(state->h, state->a);
     break;
   case 0x68:
-    UnimplementedInstruction(state);
+    MOV_(state->l, state->b);
     break;
   case 0x69:
-    UnimplementedInstruction(state);
+    MOV_(state->l, state->c);
     break;
   case 0x6a:
-    UnimplementedInstruction(state);
+    MOV_(state->l, state->d);
     break;
   case 0x6b:
-    UnimplementedInstruction(state);
+    MOV_(state->l, state->e);
     break;
   case 0x6c:
-    UnimplementedInstruction(state);
+    MOV_(state->l, state->h);
     break;
   case 0x6d:
-    UnimplementedInstruction(state);
+    MOV_(state->l, state->l);
     break;
   case 0x6e:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    MOV_(state->l, state->memory[hl]);
     break;
   case 0x6f:
-    UnimplementedInstruction(state);
+    MOV_(state->l, state->a);
     break;
   case 0x70:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    MOV_(state->memory[hl], state->b);
     break;
   case 0x71:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    MOV_(state->memory[hl], state->c);
     break;
   case 0x72:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    MOV_(state->memory[hl], state->d);
     break;
   case 0x73:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    MOV_(state->memory[hl], state->e);
     break;
   case 0x74:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    MOV_(state->memory[hl], state->h);
     break;
   case 0x75:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    MOV_(state->memory[hl], state->l);
     break;
-  case 0x76:
+  case 0x76: //HLT
     UnimplementedInstruction(state);
     break;
   case 0x77:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    MOV_(state->memory[hl], state->a);
     break;
   case 0x78:
-    UnimplementedInstruction(state);
+    MOV_(state->a, state->b);
     break;
   case 0x79:
-    UnimplementedInstruction(state);
+    MOV_(state->a, state->c);
     break;
   case 0x7a:
-    UnimplementedInstruction(state);
+    MOV_(state->a, state->d);
     break;
   case 0x7b:
-    UnimplementedInstruction(state);
+    MOV_(state->a, state->e);
     break;
   case 0x7c:
-    UnimplementedInstruction(state);
+    MOV_(state->a, state->h);
     break;
   case 0x7d:
-    UnimplementedInstruction(state);
+    MOV_(state->a, state->l);
     break;
   case 0x7e:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    MOV_(state->a, state->memory[hl]);
     break;
   case 0x7f:
-    UnimplementedInstruction(state);
+    MOV_(state->a, state->a);
     break;
-  case 0x80:
-    UnimplementedInstruction(state);
+  case 0x80: // ADD B
+    state->a = addAndCarries(state->a, state->b, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x81:
-    UnimplementedInstruction(state);
+  case 0x81: // ADD C
+    state->a = addAndCarries(state->a, state->c, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x82:
-    UnimplementedInstruction(state);
+  case 0x82: // ADD D
+    state->a = addAndCarries(state->a, state->d, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x83:
-    UnimplementedInstruction(state);
+  case 0x83: // ADD E
+    state->a = addAndCarries(state->a, state->e, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x84:
-    UnimplementedInstruction(state);
+  case 0x84: // ADD H
+    state->a = addAndCarries(state->a, state->h, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x85:
-    UnimplementedInstruction(state);
+  case 0x85: // ADD L
+    state->a = addAndCarries(state->a, state->l, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x86:
-    UnimplementedInstruction(state);
+  case 0x86: // ADD M
+    hl = concBytes(state->h, state->l);
+    state->a = addAndCarries(state->a, state->memory[hl], INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x87:
-    UnimplementedInstruction(state);
+  case 0x87: // ADD A
+    state->a = addAndCarries(state->a, state->a, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x88:
-    UnimplementedInstruction(state);
+  case 0x88:// ADC B
+    state->a = addAndCarries(state->a, state->b, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
+    state->a = addAndCarries(state->a, state->cc.cy, INT_8,
+                              &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x89:
-    UnimplementedInstruction(state);
+  case 0x89:// ADC C
+    state->a = addAndCarries(state->a, state->c, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
+    state->a = addAndCarries(state->a, state->cc.cy, INT_8,
+                              &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x8a:
-    UnimplementedInstruction(state);
+  case 0x8a:// ADC D
+    state->a = addAndCarries(state->a, state->d, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
+    state->a = addAndCarries(state->a, state->cc.cy, INT_8,
+                              &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x8b:
-    UnimplementedInstruction(state);
+  case 0x8b:// ADC E
+    state->a = addAndCarries(state->a, state->e, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
+    state->a = addAndCarries(state->a, state->cc.cy, INT_8,
+                              &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x8c:
-    UnimplementedInstruction(state);
+  case 0x8c:// ADC H
+    state->a = addAndCarries(state->a, state->h, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
+    state->a = addAndCarries(state->a, state->cc.cy, INT_8,
+                              &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x8d:
-    UnimplementedInstruction(state);
+  case 0x8d:// ADC L
+    state->a = addAndCarries(state->a, state->l, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
+    state->a = addAndCarries(state->a, state->cc.cy, INT_8,
+                              &state->cc.cy, &state->cc.ac, &affected);
     break;
   case 0x8e:
-    UnimplementedInstruction(state);
+    hl = concBytes(state->h, state->l);
+    state->a = addAndCarries(state->a, state->memory[hl], INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
+    state->a = addAndCarries(state->a, state->cc.cy, INT_8,
+                              &state->cc.cy, &state->cc.ac, &affected);
     break;
-  case 0x8f:
-    UnimplementedInstruction(state);
+  case 0x8f:// ADC A
+    state->a = addAndCarries(state->a, state->a, INT_8,
+                            &state->cc.cy, &state->cc.ac, &affected);
+    state->a = addAndCarries(state->a, state->cc.cy, INT_8,
+                              &state->cc.cy, &state->cc.ac, &affected);
     break;
   case 0x90:
     UnimplementedInstruction(state);
-    break;
   case 0x91:
     UnimplementedInstruction(state);
     break;
